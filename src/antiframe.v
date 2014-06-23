@@ -3,10 +3,17 @@ Require Import bitsrep procstate procstatemonad SPred septac spec.
 Require Import cursor pointsto pfun safe.
 Require Import triple (* for toPState *).
 Require Import Setoid CSetoid Morphisms.
+Require Import FunctionalExtensionality.
 
 Set Implicit Arguments.
 Unset Strict Implicit.
 Import Prenex Implicits.
+
+Lemma sa_mul_Some_None f (d: fragDom f) (x: fragTgt f) (s1 s2 s: PState):
+  sa_mul s1 s2 s -> s1 f d = Some x -> s2 f d = None.
+Proof.
+  move/(_ f d). destruct (s f d); intuition congruence.
+Qed.
 
 Definition matchRegInPStateDom (r: AnyReg) (f: Frag) :=
   match f return fragDom f -> bool with
@@ -31,17 +38,59 @@ Lemma stateSplitsAs_reg_or s s1 s2 r:
   s1 Registers r = s Registers r \/ s2 Registers r = s Registers r.
 Proof.
   move => Hs. specialize (Hs Registers r).
-  destruct (s Registers r) as [v|]; intuition.
+  destruct (s Registers r) as [v|]; tauto.
 Qed.
 
+(* P is closed under removal of r *)
 Definition regNotIn r (P: SPred) :=
-  forall s, P s -> s Registers r = None.
+  forall s, P s -> P (removeRegFromPState s r).
 
-(*
-Conjecture regNotIn_alt: forall r P,
-  regNotIn r P <-> 
-  P //\\ (r? ** ltrue) |-- lfalse.
-*)
+Lemma regNotIn_sepSP r P Q:
+  regNotIn r P -> regNotIn r Q -> regNotIn r (P ** Q).
+Proof.
+  Transparent ILPre_Ops PStateSepAlgOps sepILogicOps ILFun_Ops.
+  move => HrNotInP HrNotInQ s HPQ.
+  destruct HPQ as [sP [sQ [Hs [HsP HsQ]]]].
+  wlog : P Q sP sQ HrNotInP HrNotInQ Hs HsP HsQ
+           / sP Registers r = s Registers r.
+  { edestruct stateSplitsAs_reg_or with (r:=r) as [HrP | HrQ]; first apply Hs.
+    { apply; eassumption. }
+    move/(_ Q P sQ sP) => Hwlog. rewrite ->lentails_eq, sepSPC, <-lentails_eq.
+    apply: Hwlog; try done; []. by apply sa_mulC.
+  }
+  move => HrP.
+  exists (removeRegFromPState sP r). exists sQ. split; last first.
+  + split; last done. by apply HrNotInP.
+  + move => f r'. rewrite /removeRegFromPState /restrictState /matchRegInPStateDom.
+    destruct f.
+    * case Hrx: (r == r').
+      - rewrite -(eqP Hrx). split; first done.
+        specialize (Hs Registers r'). rewrite -(eqP Hrx) HrP in Hs.
+        destruct (s Registers r); last tauto.
+        destruct Hs as [|[_ Hs]]; first tauto. done.
+      - apply (Hs Registers).
+    * apply (Hs Memory).
+    * apply (Hs Flags).
+    * apply (Hs Traces).
+Qed.
+Hint Resolve regNotIn_sepSP : reg_not_in.
+
+Module SanityChecking_regNotIn.
+  Definition regIsNone r (P: SPred) :=
+    forall s, P s -> s Registers r = None.
+
+  Lemma reg_IsNone_NotIn r P:
+    regIsNone r P -> regNotIn r P.
+  Proof.
+    rewrite /regIsNone /regNotIn => H s Hs.
+    replace (removeRegFromPState s r) with s; first done.
+    apply functional_extensionality_dep.
+    move => []; try reflexivity.
+    apply functional_extensionality => r'.
+    rewrite /removeRegFromPState /restrictState /matchRegInPStateDom.
+    case Hr': (r == r'); last done. rewrite -(eqP Hr'). by apply H.
+  Qed.
+End SanityChecking_regNotIn.
 
 Instance at_contra_entails (S: spec) `{HContra: AtContra S}:
   Proper (ge ++> lentails --> lentails) S.
@@ -56,16 +105,16 @@ Qed.
 
 
 Theorem antiframe_register (r: AnyReg) P S:
-  |-- (S -->> safe @ P) <@ r? ->
   regNotIn r P ->
   AtContra S ->
+  |-- (S -->> safe @ P) <@ r? ->
   S |-- safe @ P.
 Proof.
   Transparent ILPre_Ops PStateSepAlgOps sepILogicOps ILFun_Ops.
 
   rewrite /stateIsAny.
   rewrite <-spec_reads_ex.
-  move => H HPr Hcontra k R HS. move => s Hps.
+  move => HPr Hcontra H k R HS. move => s Hps.
 
   lforwardR H.
   { apply lforallL with (s.(registers) r).
@@ -76,12 +125,32 @@ Proof.
   { apply landR; first apply ltrueR. reflexivity. }
 
   rewrite ->lentails_eq, ->sepSPA, <-lentails_eq in Hps.
-
   destruct Hps as [sP [s' [Hsp [HsP Hs']]]].
-  edestruct stateSplitsAs_reg_or with (r:=r) as [HrP | Hr_else]; first apply Hsp.
-  { exfalso. specialize (HPr sP HsP). rewrite HPr in HrP.
-    simpl in HrP. discriminate. }
 
+  without loss : sP s' HsP Hsp Hs' / s' Registers r = (toPState s) Registers r.
+  { edestruct stateSplitsAs_reg_or with (r:=r) as [HrP | HrQ];
+      first apply Hsp; last first.
+    { apply; try eassumption. }
+    move/(_ (removeRegFromPState sP r) (addRegToPState s' r (s.(registers) r))). apply.
+    - by apply HPr.
+    - rewrite /removeRegFromPState /restrictState /matchRegInPStateDom.
+      move => [] r'; try apply (Hsp _ _); [].
+      simpl. case Hr': (r == r') => /=.
+      + rewrite -(eqP Hr'). by auto.
+      + specialize (Hsp Registers r'). by rewrite /= in Hsp.
+    - destruct Hs' as [sR [strue [Hs' [HsR _]]]].
+      exists sR. exists (addRegToPState strue r (s.(registers) r)).
+      split; last by intuition.
+      have Hrs' := sa_mul_Some_None Hsp HrP.
+      move => [] r'; try apply (Hs' _ _); [].
+      simpl. move/(_ _ r'): Hs'. case Hr': (r == r') => /=.
+      + rewrite -(eqP Hr') => Hs'. right.
+        destruct (s' Registers r) as [v|]; last tauto. discriminate.
+      + specialize (Hsp Registers r'). by rewrite /= in Hsp.
+    - by rewrite /= eq_refl.
+  }
+
+  move => HsPr.
   specialize (H k (eq_pred (removeRegFromPState s' r))). simpl in H. apply H.
   { assert (regIs r (s.(registers) r) ** eq_pred (removeRegFromPState s' r)
             |-- R ** ltrue) as HRtrue.
@@ -91,7 +160,7 @@ Proof.
     rewrite ->HRtrue. rewrite sepSPC. by apply spec_frame. }
   rewrite ->lentails_eq, ->!sepSPA, <-lentails_eq.
   do 2 eexists. do 2 (split; first eassumption).
-  clear - Hr_else.
+  clear - HsPr.
   exists (addRegToPState emptyPState r (s.(registers) r)).
   exists (removeRegFromPState s' r).
   split.
@@ -104,7 +173,5 @@ Proof.
 Qed.
 
 (* TODO: extend to RegOrFlag *)
-(* TODO: generalize side condition on P: probably P just needs to be
-   closed under removal of r. Then if r is in sP, we can move it to the ltrue
-   part of the heap. *)
+(* TODO: set up hint database to prove side condition on P *)
 (* TODO: is the theorem strong enough to easily extend to multiple registers? *)
