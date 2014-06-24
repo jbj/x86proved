@@ -1,3 +1,10 @@
+(*===========================================================================
+    Anti-frame rule for registers
+
+    This rule allows removing a register from the footprint of a program even
+    though the program reads and writes it, as long as the value is restored at
+    the end. This captures the common (PUSH r;; c;; POP r) pattern.
+  ===========================================================================*)
 Require Import ssreflect ssrbool ssrfun ssrnat eqtype tuple seq fintype.
 Require Import procstate SPred spec pointsto safe.
 Require Import triple (* for toPState *).
@@ -10,7 +17,8 @@ Import Prenex Implicits.
 
 Local Transparent ILPre_Ops PStateSepAlgOps sepILogicOps ILFun_Ops.
 
-(* P is closed under removal of r *)
+(* P is closed under removal of r. Intuitively, it means that r does not occur
+ * in P. *)
 Definition regNotIn r (P: SPred) :=
   forall s, P s -> P (removeRegFromPState s r).
 
@@ -36,6 +44,10 @@ Proof.
   rewrite ->lentails_eq, ->sepSPA, <-lentails_eq in Hps.
   destruct Hps as [sP [s' [Hsp [HsP Hs']]]].
 
+  (* Without loss of generality, we can assume that register r is in s' (not
+     sP). Otherwise, we can "move" it to s': it can be removed from sP because
+     P is closed under removal of r, and it can be added to s' because the
+     ltrue assertion can absorb it. *)
   without loss : sP s' HsP Hsp Hs' / s' Registers r = (toPState s) Registers r.
   { edestruct stateSplitsAs_reg_or with (r:=r) as [HrP | HrQ];
       first apply Hsp; last first.
