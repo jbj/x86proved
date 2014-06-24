@@ -10,50 +10,9 @@ Import Prenex Implicits.
 
 Local Transparent ILPre_Ops PStateSepAlgOps sepILogicOps ILFun_Ops.
 
-Lemma sa_mul_Some_None f (d: fragDom f) (x: fragTgt f) (s1 s2 s: PState):
-  sa_mul s1 s2 s -> s1 f d = Some x -> s2 f d = None.
-Proof.
-  move/(_ f d). destruct (s f d); intuition congruence.
-Qed.
-
-Definition matchRegInPStateDom (r: AnyReg) (f: Frag) :=
-  match f return fragDom f -> bool with
-  | Registers => fun r' => r == r'
-  | _ => fun _ => false
-  end.
-
-Definition removeRegFromPState (s:PState) (r:AnyReg) : PState :=
-  restrictState s (fun f x => ~~ matchRegInPStateDom r x).
-
-Lemma matchRegInPStateDom_addRegToPState (s: PState) r v:
-  s Registers r = Some v ->
-  restrictState s (matchRegInPStateDom r) === addRegToPState emptyPState r v.
-Proof.
-  rewrite /restrictState.
-  move => H [] x /=; try reflexivity; [].
-  case Hrx: (r == x); last done. by rewrite -(eqP Hrx).
-Qed.
-
-Lemma stateSplitsAs_reg_or s s1 s2 r:
-  stateSplitsAs s s1 s2 ->
-  s1 Registers r = s Registers r \/ s2 Registers r = s Registers r.
-Proof.
-  move => Hs. specialize (Hs Registers r).
-  destruct (s Registers r) as [v|]; tauto.
-Qed.
-
 (* P is closed under removal of r *)
 Definition regNotIn r (P: SPred) :=
   forall s, P s -> P (removeRegFromPState s r).
-
-Instance at_contra_entails (S: spec) `{HContra: AtContra S}:
-  Proper (ge ++> lentails --> lentails) S.
-Proof.
-  move => k k' Hk P P' HP H. rewrite <-Hk.
-  specialize (HContra P' P HP).
-  specialize (HContra k empSP).
-  simpl in HContra. rewrite ->!empSPR in HContra. by auto.
-Qed.
 
 
 Theorem antiframe_register (r: AnyReg) P S:
@@ -91,7 +50,7 @@ Proof.
     - destruct Hs' as [sR [strue [Hs' [HsR _]]]].
       exists sR. exists (addRegToPState strue r (s.(registers) r)).
       split; last by intuition.
-      have Hrs' := sa_mul_Some_None Hsp HrP.
+      have Hrs' := stateSplitsAs_Some_None Hsp HrP.
       move => [] r'; try apply (Hs' _ _); [].
       simpl. move/(_ _ r'): Hs'. case Hr': (r == r') => /=.
       + rewrite -(eqP Hr') => Hs'. right.
@@ -105,7 +64,7 @@ Proof.
   { assert (regIs r (s.(registers) r) ** eq_pred (removeRegFromPState s' r)
             |-- R ** ltrue) as HRtrue.
     { rewrite ->lentails_eq in Hs'. rewrite <-Hs'. apply stateSplitsAs_eq.
-      rewrite <-matchRegInPStateDom_addRegToPState; last eassumption.
+      erewrite <-matchRegInPStateDom_addRegToPState; last eassumption.
       by apply stateSplitsOn. }
     rewrite ->HRtrue. rewrite sepSPC. by apply spec_frame. }
   rewrite ->lentails_eq, ->!sepSPA, <-lentails_eq.
@@ -114,7 +73,7 @@ Proof.
   exists (addRegToPState emptyPState r (s.(registers) r)).
   exists (removeRegFromPState s' r).
   split.
-  - rewrite <-matchRegInPStateDom_addRegToPState; last eassumption.
+  - erewrite <-matchRegInPStateDom_addRegToPState; last eassumption.
     by apply stateSplitsOn.
   - split.
     + simpl. reflexivity.

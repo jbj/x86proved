@@ -223,6 +223,20 @@ Proof.
   split => fr; by have [? ?] := splitsAsIncludedInSplitsAs (Hsplit fr) (Hinc fr).
 Qed.
 
+Lemma stateSplitsAs_reg_or s s1 s2 r:
+  stateSplitsAs s s1 s2 ->
+  s1 Registers r = s Registers r \/ s2 Registers r = s Registers r.
+Proof.
+  move => Hs. specialize (Hs Registers r).
+  destruct (s Registers r) as [v|]; tauto.
+Qed.
+
+Lemma stateSplitsAs_Some_None f (d: fragDom f) (x: fragTgt f) (s1 s2 s: PState):
+  stateSplitsAs s s1 s2 -> s1 f d = Some x -> s2 f d = None.
+Proof.
+  move/(_ f d). destruct (s f d); intuition congruence.
+Qed.
+
 Lemma stateSplitsAs_functional s1 s2 h i : stateSplitsAs h s1 s2 -> stateSplitsAs i s1 s2 -> h = i.
 Proof. move => H1 H2.
 extensionality f.
@@ -268,6 +282,24 @@ case E: (s f x) => [a |] => //. rewrite /restrictState.
 case E': (p f x). rewrite E. left; done. right. by rewrite E.
 rewrite /restrictState.  rewrite E.
 by case (p f x).
+Qed.
+
+Definition matchRegInPStateDom (r: AnyReg) (f: Frag) :=
+  match f return fragDom f -> bool with
+  | Registers => fun r' => r == r'
+  | _ => fun _ => false
+  end.
+
+Definition removeRegFromPState (s:PState) (r:AnyReg) : PState :=
+  restrictState s (fun f x => ~~ matchRegInPStateDom r x).
+
+Lemma matchRegInPStateDom_addRegToPState (s: PState) r v:
+  s Registers r = Some v ->
+  restrictState s (matchRegInPStateDom r) = addRegToPState emptyPState r v.
+Proof.
+  rewrite /restrictState. move => H. extensionality f. extensionality x.
+  destruct f; try reflexivity; [] => /=.
+  case Hrx: (r == x); last done. by rewrite -(eqP Hrx).
 Qed.
 
 (* Builds a total memory with the same mappings as the partial memory s.

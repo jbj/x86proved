@@ -368,6 +368,22 @@ Instance spec_at_contra_m S {HS: AtContra S} :
   Proper (lentails --> lentails) (spec_at S).
 Proof. move=> P Q HPQ. by apply HS. Qed.
 
+Instance at_contra_entails_m (S: spec) `{HContra: AtContra S}:
+  Proper (ge ++> lentails --> lentails) S.
+Proof.
+  move => k k' Hk P P' HP H. rewrite <-Hk.
+  specialize (HContra P' P HP k empSP).
+  simpl in HContra. rewrite ->!empSPR in HContra. by auto.
+Qed.
+
+Instance at_covar_entails_m (S: spec) `{HCovar: AtCovar S}:
+  Proper (ge ++> lentails ++> lentails) S.
+Proof.
+  move => k k' Hk P P' HP H. rewrite <-Hk.
+  specialize (HCovar P P' HP k empSP).
+  simpl in HCovar. rewrite ->!empSPR in HCovar. by auto.
+Qed.
+
 (*
    Rules for pulling existentials from the second argument of spec_at. These
    rules together form a spec-level analogue of the "existential rule" for
