@@ -26,21 +26,11 @@ Definition regNotIn r (P: SPred) :=
 Theorem antiframe_register (r: AnyReg) P S:
   regNotIn r P ->
   AtContra S ->
-  |-- (S -->> safe @ P) <@ r? ->
+  (forall v, S @ (r~=v) |-- safe @ (P ** r~=v)) ->
   S |-- safe @ P.
 Proof.
-  rewrite /stateIsAny.
-  rewrite <-spec_reads_ex.
   move => HPr Hcontra H k R HS. move => s Hps.
-
-  lforwardR H.
-  { apply lforallL with (s.(registers) r).
-    rewrite ->spec_reads_entails_at; last by apply _.
-    autorewrite with push_at. reflexivity. }
-  apply landAdj in H.
-  lforwardL H.
-  { apply landR; first apply ltrueR. reflexivity. }
-
+  specialize (H (s.(registers) r)).
   rewrite ->lentails_eq, ->sepSPA, <-lentails_eq in Hps.
   destruct Hps as [sP [s' [Hsp [HsP Hs']]]].
 
@@ -90,6 +80,22 @@ Proof.
   - split.
     + simpl. reflexivity.
     + do 2 eexists. split; first by apply sa_unitI. simpl. done.
+Qed.
+
+(* More concise formulation. Probably not very useful with the tactics in this
+   development. *)
+Corollary antiframe_register_spec_reads (r: AnyReg) P S:
+  regNotIn r P ->
+  AtContra S ->
+  |-- (S -->> safe @ P) <@ r? ->
+  S |-- safe @ P.
+Proof.
+  rewrite /stateIsAny. rewrite <-spec_reads_ex.
+  move => HPr Hcontra H. apply: antiframe_register; first eassumption.
+  move => v. lforwardR H.
+  { apply lforallL with v. rewrite ->spec_reads_entails_at; last by apply _.
+    autorewrite with push_at. reflexivity. }
+  by apply limplValid.
 Qed.
 
 
