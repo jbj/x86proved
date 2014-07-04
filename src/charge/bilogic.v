@@ -173,6 +173,17 @@ Section DerivedInferenceRules.
                       apply sepSP_lentails_m. apply landL2. reflexivity. reflexivity.
   Qed.
 
+  Lemma lor_sepSP P Q R : (P\\//Q) ** R -|- (P ** R) \\// (Q**R).
+  Proof.
+    split.
+    - apply sepSPAdj. apply: lorL.
+      + apply: wandSPAdj. by apply lorR1.
+      + apply: wandSPAdj. by apply lorR2.
+    - apply lorL.
+      + cancel2. by apply lorR1.
+      + cancel2. by apply lorR2.
+  Qed.
+
 End DerivedInferenceRules.
 
 Require Import sepalg.
