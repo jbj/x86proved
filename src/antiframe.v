@@ -6,7 +6,7 @@
     the end. This captures the common (PUSH r;; c;; POP r) pattern.
   ===========================================================================*)
 Require Import ssreflect ssrbool ssrfun ssrnat eqtype tuple seq fintype.
-Require Import procstate SPred spec pointsto safe septac.
+Require Import procstate SPred spec pointsto reader safe septac.
 Require Import triple (* for toPState *).
 Require Import Setoid CSetoid Morphisms.
 Require Import FunctionalExtensionality.
@@ -17,11 +17,20 @@ Import Prenex Implicits.
 
 Local Transparent ILPre_Ops PStateSepAlgOps sepILogicOps ILFun_Ops.
 
-Definition regNotIn (r: AnyReg) (P: SPred) :=
+Definition regNotFree (r: AnyReg) (P: SPred) :=
   (P ** ltrue) //\\ (r?  ** ltrue) |-- P ** r? ** ltrue.
 
+Lemma regAny_sub (r: AnyReg) s:
+  (r? ** ltrue) s -> exists v, s Registers r = Some v.
+Proof.
+  move => [sr [strue [Hs1 [[v Hsr] _]]]].
+  move/stateSplitsAsIncludes: Hs1 => [Hs1 _].
+  simpl in Hsr. rewrite <-Hsr in Hs1.
+  exists v. apply Hs1. by rewrite /= eq_refl.
+Qed.
+
 Theorem antiframe_register (r: AnyReg) P S:
-  regNotIn r P ->
+  regNotFree r P ->
   AtContra S ->
   (forall v, S @ (r~=v) |-- safe @ (P ** r~=v)) ->
   S |-- safe @ P.
@@ -32,7 +41,7 @@ Proof.
   destruct Hps as [sP [s' [Hsp [HsP Hs']]]].
 
   (* Without loss of generality, we can assume that register r is in s' (not
-     sP). Otherwise, we can "move" it to s': regNotIn lets us isolate it in sP,
+     sP). Otherwise, we can "move" it to s': regNotFree lets us isolate it in sP,
      and it can be added to s' because the ltrue assertion can absorb it. *)
   without loss : sP s' HsP Hsp Hs' / s' Registers r = (toPState s) Registers r.
   { edestruct stateSplitsAs_reg_or with (r:=r) as [HrP | HrQ];
@@ -61,12 +70,9 @@ Proof.
     - rewrite <- HrP.
       move/stateSplitsAsIncludes: Hs'' => [_ Hsr_s''].
       move/stateSplitsAsIncludes: HsP_split => [_ Hsr_sP].
-      destruct Hsr as [sr' [strue [Hsr [[v Hsr'] _]]]].
-      destruct (stateSplitsAsIncludes Hsr) as [Hsr'_sr _].
-      simpl in Hsr'. rewrite <- Hsr' in Hsr'_sr.
-      erewrite (stateIncludedIn_trans Hsr'_sr Hsr_s''); last by rewrite /= eq_refl.
-      erewrite (stateIncludedIn_trans Hsr'_sr Hsr_sP); last by rewrite /= eq_refl.
-      done.
+      move/regAny_sub: Hsr => [v Hsr].
+      move/(_ _ _ _ Hsr): Hsr_s'' => ->.
+      move/(_ _ _ _ Hsr): Hsr_sP => ->. done.
   }
 
   move => HsPr.
@@ -93,7 +99,7 @@ Qed.
 (* More concise formulation. Probably not very useful with the tactics in this
    development. *)
 Corollary antiframe_register_spec_reads (r: AnyReg) P S:
-  regNotIn r P ->
+  regNotFree r P ->
   AtContra S ->
   |-- (S -->> safe @ P) <@ r? ->
   S |-- safe @ P.
@@ -107,7 +113,13 @@ Proof.
 Qed.
 
 
-(* Now follows lemmas for proving regNotIn. *)
+(* Now follows lemmas for proving regNotFree. *)
+
+Instance regNotFree_lequiv r:
+  Proper (lequiv --> Basics.impl) (regNotFree r).
+Proof.
+  rewrite /regNotFree /Basics.flip. by move => P P' ->.
+Qed.
 
 Lemma stateSplitsAs_move_register r v s:
   s Registers r = Some v ->
@@ -147,10 +159,10 @@ Proof.
   erewrite <- Hs_r; first reflexivity. rewrite <-Hsr. by rewrite /= eq_refl.
 Qed.
 
-Lemma regNotIn_sepSP r P Q:
-  regNotIn r P -> regNotIn r Q -> regNotIn r (P ** Q).
+Lemma regNotFree_sepSP r P Q:
+  regNotFree r P -> regNotFree r Q -> regNotFree r (P ** Q).
 Proof.
-  rewrite /regNotIn => HrNotInP HrNotInQ.
+  rewrite /regNotFree => HrNotInP HrNotInQ.
   rewrite ->stateAny_atomic.
   apply lorL; last first.
   - rewrite ![(P ** Q) ** _]sepSPA. cancel2. cancel2. by apply landL2.
@@ -160,94 +172,181 @@ Proof.
     + rewrite -{1}[Q]empSPR. rewrite ->(ltrueR empSP).
       rewrite ->HrNotInQ. by ssimpl.
 Qed.
-Hint Resolve regNotIn_sepSP : reg_not_in.
+Hint Resolve regNotFree_sepSP : reg_not_in.
 
-Lemma regNotIn_or r P Q:
-  regNotIn r P -> regNotIn r Q -> regNotIn r (P \\// Q).
+Lemma regNotFree_or r P Q:
+  regNotFree r P -> regNotFree r Q -> regNotFree r (P \\// Q).
 Proof.
-  rewrite /regNotIn => HrNotInP HrNotInQ. rewrite lor_sepSP.
+  rewrite /regNotFree => HrNotInP HrNotInQ. rewrite lor_sepSP.
   apply landAdj; apply lorL; apply limplAdj.
   - rewrite lor_sepSP. by apply lorR1.
   - rewrite lor_sepSP. by apply lorR2.
 Qed.
-Hint Resolve regNotIn_or : reg_not_in.
+Hint Resolve regNotFree_or : reg_not_in.
 
-Lemma regNotIn_exists r T (P: T -> SPred):
-  (forall t, regNotIn r (P t)) -> regNotIn r (lexists P).
+Lemma regNotFree_exists r T (P: T -> SPred):
+  (forall t, regNotFree r (P t)) -> regNotFree r (lexists P).
 Proof.
-  rewrite /regNotIn => HrNotInP.
+  rewrite /regNotFree => HrNotInP.
   apply landAdj. sdestruct => t. apply limplAdj. ssplit. apply HrNotInP.
 Qed.
-Hint Resolve regNotIn_exists : reg_not_in.
+Hint Resolve regNotFree_exists : reg_not_in.
 
-Lemma regNotIn_false r:
-  regNotIn r lfalse.
+(* This definition is stronger than regNotFree but is often easier to prove.
+   It does not hold for P=ltrue. *)
+Definition regMissingIn (r: AnyReg) (P: SPred) :=
+  P //\\ (r?  ** ltrue) |-- lfalse.
+
+Lemma regMissingIn_regNotFree r P:
+  regMissingIn r P -> regNotFree r P.
 Proof.
-  rewrite /regNotIn. apply landL1. rewrite ->lfalse_is_exists at 1.
-  by sdestruct.
+  rewrite /regMissingIn /regNotFree => H.
+  rewrite ->stateAny_atomic. rewrite ->H.
+  apply lorL; first by ssimpl.
+  cancel2. by apply landL2.
 Qed.
-Hint Resolve regNotIn_false : reg_not_in.
+Hint Immediate regMissingIn_regNotFree : reg_not_in.
 
-Lemma regNotIn_true r:
-  regNotIn r ltrue.
+(* This morphism is not available for regNotFree, and it makes an important
+   difference when dealing for spec_reads, whose definition contains lentails.
+ *)
+Instance regMissingIn_lentails r:
+  Proper (lentails --> Basics.impl) (regMissingIn r).
 Proof.
-  rewrite /regNotIn. apply landL2. rewrite <-(ltrueR empSP) at 2. by ssimpl.
+  rewrite /regMissingIn /Basics.flip => P P' HP H. by rewrite ->HP.
 Qed.
-Hint Resolve regNotIn_true : reg_not_in.
 
-(* I have not found modular proofs of regNotIn for lforall, //\\, -* and -->>.
+Instance regMissingIn_lequiv r:
+  Proper (lequiv ==> iff) (regMissingIn r).
+Proof.
+  move => P P' [HP HP']. split.
+  - by rewrite ->HP'.
+  - by rewrite <-HP.
+Qed.
+
+Lemma regMissingIn_empSP r:
+  regMissingIn r empSP.
+Proof.
+  move => s [Hemp Hrtrue]. move/regAny_sub: Hrtrue => [vr Hsr].
+  rewrite /empSP /sepLogicOps /SABIOps /= in Hemp. destruct Hemp as [Hs _].
+  rewrite <-Hs in Hsr. discriminate.
+Qed.
+Hint Resolve regMissingIn_empSP : reg_not_in.
+
+Lemma regMissingIn_false r:
+  regMissingIn r lfalse.
+Proof.
+  by apply landL1.
+Qed.
+Hint Resolve regMissingIn_false : reg_not_in.
+
+Lemma regNotFree_true r:
+  regNotFree r ltrue.
+Proof.
+  rewrite /regNotFree. apply landL2. rewrite <-(ltrueR empSP) at 2. by ssimpl.
+Qed.
+Hint Resolve regNotFree_true : reg_not_in.
+
+Lemma regNotFree_propand r p P:
+  regNotFree r P -> regNotFree r (p /\\ P).
+Proof.
+  move => H. by apply regNotFree_exists.
+Qed.
+Hint Resolve regNotFree_propand : reg_not_in.
+
+(* I have not found modular proofs of regNotFree for lforall, //\\, -* and -->>.
    Proofs exist for lforall and //\\ for a stronger definition: P is closed
-   under removal of r from its states. Other proofs might exist for an even
-   stronger definition: r is not in any of P's states. But the latter definition
-   excludes "ltrue".
+   under removal of r from its states: [P //\\ (r?  ** ltrue) |-- P ** r?].
  *)
 
-Lemma regNotIn_flag r (f: Flag) (v: FlagVal):
-  regNotIn r (f ~= v).
+Lemma regMissingIn_sepSP r P Q:
+  regMissingIn r P -> regMissingIn r Q -> regMissingIn r (P ** Q).
 Proof.
-  rewrite /regNotIn. rewrite ->stateAny_atomic. apply lorL.
-  - move => s [s1 [_ [_ [Hs1 _]]]].
-    destruct Hs1 as [Hfv [sr [strue [Hs1 [[vr Hsr] _]]]]].
-    move/stateSplitsAsIncludes: Hs1 => [Hs1 _]. simpl in Hfv, Hsr.
-    rewrite <-Hfv, <-Hsr in Hs1.
-    specialize (Hs1 Registers r vr). rewrite /= eq_refl in Hs1.
-    cbv in Hs1. intuition. discriminate.
-  - cancel2. by apply landL2.
+  rewrite /regMissingIn => HP HQ. rewrite ->stateAny_atomic. apply lorL.
+  - rewrite ->HP. by ssimpl.
+  - rewrite ->HQ. by ssimpl.
 Qed.
-Hint Resolve regNotIn_flag : reg_not_in.
+Hint Resolve regMissingIn_sepSP : reg_not_in.
 
-Lemma regNotIn_flagAny r (f: Flag):
-  regNotIn r (f?).
+Lemma regMissingIn_exists r T (P: T -> SPred):
+  (forall t, regMissingIn r (P t)) -> regMissingIn r (lexists P).
 Proof.
-  apply regNotIn_exists. apply regNotIn_flag.
+  rewrite /regMissingIn => H. apply landAdj. apply lexistsL => t.
+  by apply limplAdj.
 Qed.
-Hint Resolve regNotIn_flagAny : reg_not_in.
+Hint Resolve regMissingIn_exists : reg_not_in.
 
-Lemma regNotIn_reg (r r': AnyReg) (v: DWORD):
-  r != r' -> regNotIn r (r' ~= v).
+Lemma regMissingIn_propand r p P:
+  regMissingIn r P -> regMissingIn r (p /\\ P).
 Proof.
-  rewrite /regNotIn => Hrr'. rewrite ->stateAny_atomic. apply lorL.
-  - move => s [s1 [_ [_ [Hs1 _]]]].
-    destruct Hs1 as [Hfv [sr [strue [Hs1 [[vr Hsr] _]]]]].
-    move/stateSplitsAsIncludes: Hs1 => [Hs1 _]. simpl in Hfv, Hsr.
-    rewrite <-Hfv, <-Hsr in Hs1.
-    specialize (Hs1 Registers r vr). rewrite /= eq_refl in Hs1.
-    rewrite ifN_eqC in Hs1; last assumption.
-    cbv in Hs1. intuition. discriminate.
-  - cancel2. by apply landL2.
+  move => H. by apply regMissingIn_exists.
 Qed.
-Hint Resolve regNotIn_reg : reg_not_in.
+Hint Resolve regMissingIn_propand : reg_not_in.
 
-Lemma regNotIn_regAny r (r': AnyReg):
-  r != r' -> regNotIn r (r'?).
+Lemma regMissingIn_flag r (f: Flag) (v: FlagVal):
+  regMissingIn r (f ~= v).
 Proof.
-  move => Hr'. apply regNotIn_exists => v. by apply regNotIn_reg.
+  move => s [Hfv Hrtrue]. move/regAny_sub: Hrtrue => [vr Hsr].
+  simpl in Hfv. rewrite <-Hfv in Hsr. discriminate.
 Qed.
-Hint Resolve regNotIn_regAny : reg_not_in.
+Hint Resolve regMissingIn_flag : reg_not_in.
 
+Lemma regMissingIn_byte r i v:
+  regMissingIn r (byteIs i v).
+Proof.
+  move => s [Hiv Hrtrue]. move/regAny_sub: Hrtrue => [vr Hsr].
+  simpl in Hiv. rewrite <-Hiv in Hsr. discriminate.
+Qed.
+Hint Resolve regMissingIn_byte : reg_not_in.
 
+Lemma regMissingIn_flagAny r (f: Flag):
+  regMissingIn r (f?).
+Proof.
+  rewrite /stateIsAny. by auto with reg_not_in.
+Qed.
+Hint Resolve regMissingIn_flagAny : reg_not_in.
+
+Lemma regMissingIn_reg (r r': AnyReg) (v: DWORD):
+  r != r' -> regMissingIn r (r' ~= v).
+Proof.
+  move => Hrr' s [Hfv Hrtrue]. move/regAny_sub: Hrtrue => [vr Hsr].
+  simpl in Hfv. rewrite <-Hfv in Hsr. rewrite /addRegToPState in Hsr.
+  rewrite ifN_eqC in Hsr; last assumption. discriminate.
+Qed.
+Hint Resolve regMissingIn_reg : reg_not_in.
+
+(* Needed because the regMissingIn_reg is cost 1 and won't apply after Hint
+   Immediate. *)
+Lemma regNotFree_reg (r r': AnyReg) (v: DWORD):
+  r != r' -> regNotFree r (r' ~= v).
+Proof.
+  move => H. apply regMissingIn_regNotFree. auto with reg_not_in.
+Qed.
+Hint Resolve regNotFree_reg : reg_not_in.
+
+Lemma regMissingIn_regAny r (r': AnyReg):
+  r != r' -> regMissingIn r (r'?).
+Proof.
+  move => Hr'. rewrite /stateIsAny. by auto with reg_not_in.
+Qed.
+Hint Resolve regMissingIn_regAny : reg_not_in.
+
+(* Unfortunately we cannot prove this for general memIs since the memIs
+   definition does not limit the SPred predicate in any way. *)
+Lemma regMissingIn_reader R {reader: Reader R} r i j (v: R) :
+  regMissingIn r (i -- j :-> v).
+Proof.
+  rewrite readerMemIsSimpl. move: i j. induction reader => i j.
+  - rewrite /interpReader. by eauto with reg_not_in.
+  - rewrite /interpReader. destruct i; by eauto with reg_not_in.
+  - rewrite /interpReader. destruct i; by eauto with reg_not_in.
+  - rewrite /interpReader. by eauto with reg_not_in.
+Qed.
+Hint Resolve regMissingIn_reader : reg_not_in.
+
+(* TODO: prove base cases of regNotFree simpler *)
 (* TODO: extend antiframe to flags *)
-(* TODO: regNotIn_pointsto family along with forall, -->>, -*, ->>, /\\ *)
+(* TODO: reg_not_in hints for forall, -->>, -*, ->> *)
 (* TODO: is the theorem strong enough to easily extend to multiple registers? *)
 (* TODO: corollary for basic *)
 (* TODO: extend to other RHS than [safe @ P]? The only property of [safe] we're

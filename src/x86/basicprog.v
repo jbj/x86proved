@@ -5,7 +5,7 @@ Require Import ssreflect ssrbool ssrnat eqtype seq fintype.
 Require Import procstate procstatemonad bitsops bitsprops bitsopsprops.
 Require Import SPred septac spec spectac safe pointsto cursor instr reader instrcodec.
 Require Import Setoid RelationClasses Morphisms.
-Require Import program basic.
+Require Import program basic antiframe.
 
 (* Morphism for program equivalence *)
 Global Instance basic_progEq_m:
@@ -56,6 +56,34 @@ Lemma basic_instr S P i Q :
   S |-- basic P i Q ->
   S |-- basic P (prog_instr i) Q.
 Proof. done. Qed.
+
+Lemma regMissingIn_program r (i j: DWORD) (c: program):
+  regMissingIn r (i -- j :-> c).
+Proof.
+  move: i j.
+  induction c => i j; unfold_program; by eauto with reg_not_in.
+Qed.
+Hint Resolve regMissingIn_program : reg_not_in.
+
+Lemma antiframe_register_basic (r: Reg) P Q c:
+  regNotFree r P ->
+  (forall v, |-- basic (P ** r~=v) c (Q ** r~=v)) ->
+  |-- basic P c Q.
+Proof.
+  rewrite /basic /spec_reads => HregNotFree H.
+  specintros => i j s Hs. autorewrite with push_at. apply limplValid.
+  apply antiframe_register with r.
+  - apply regNotFree_sepSP.
+    + apply regNotFree_sepSP; last done. apply regNotFree_reg.
+      by destruct r; first destruct r.
+    + apply regMissingIn_regNotFree. rewrite ->Hs. auto with reg_not_in.
+  - apply _.
+  - move => v. specialize (H v). lforwardR H.
+    { apply lforallL with i. apply lforallL with j. apply lforallL with s.
+      apply lpropimplL; first done. reflexivity. }
+    specapply H; first by ssimpl. autorewrite with push_at.
+    rewrite spec_reads_emp. cancel1. by ssimpl.
+Qed.
 
 (* Attempts to apply "basic" lemma on a single command (basic_basic) or
    on the first of a sequence (basic_seq). Note that it attempts to use sbazooka

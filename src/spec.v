@@ -630,6 +630,12 @@ Proof.
     simpl in Hs'; rewrite -> Hs'; reflexivity.
 Qed.
 
+Lemma spec_reads_emp S:
+  S <@ empSP -|- S.
+Proof.
+  rewrite emp_unit spec_reads_eq_at -emp_unit. by rewrite spec_at_emp.
+Qed.
+
 Corollary spec_reads_byteIs S p b:
   S <@ byteIs p b -|- S @ byteIs p b.
 Proof. apply spec_reads_eq_at. Qed.
